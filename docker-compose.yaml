@@ -1,0 +1,22 @@
+services:
+  mongo_rs:
+    image: mongo:6@sha256:a1b8cde881cbff434f6c81f57f02108509987cf758a5665f7d1ef484e28bee47
+    hostname: mongo_rs
+    container_name: oreilly_mongo_rs
+    ports:
+      - "27017:27017"
+    volumes:
+      - "mongo-data-rs:/data/db"
+    command: ["mongod", "--replSet", "rs0"]
+
+  mongo_init:
+    image: mongo:6@sha256:a1b8cde881cbff434f6c81f57f02108509987cf758a5665f7d1ef484e28bee47
+    depends_on:
+      - mongo_rs
+    command: >
+      bash -c "
+        sleep 5;
+        mongosh --host mongo_rs --eval 'rs.initiate()';
+      "
+volumes:
+  mongo-data-rs: {}
