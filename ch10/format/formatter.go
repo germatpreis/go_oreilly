@@ -1,7 +1,9 @@
 package format
 
-import "fmt"
-import "ch10/internal"
+import (
+	"ch10/internal"
+	"fmt"
+)
 
 func Number(num int) string {
 	internal.Doubler(2)

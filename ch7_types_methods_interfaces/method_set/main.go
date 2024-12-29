@@ -1,7 +1,6 @@
 package main
 
 import (
-	"debug/dwarf"
 	"fmt"
 	"time"
 )
