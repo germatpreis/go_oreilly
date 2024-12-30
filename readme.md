@@ -732,6 +732,146 @@ go install golang.org/x/tools/cmd/goimports@latest
 goimports -l -w .
 ```
 
+### code analysis: staticcheck
+
+It is recommended by the community. Detects issues that `go vet` does not. I think
+this might be used in `goland` anyway.
+
+```sh
+go install honnef.co/go/tools/cmd/staticcheck@latest
+staticcheck ./...
+# assuming the above produces a finding like
+# main.go:6:7: unnecessary use of fmt.Sprintf (S1039)
+staticcheck -explain S1039
+# ...the finding is described in detail...
+```
+
+### configurable linter: revive
+
+In its default configuration does the same thing as `golint`, but it can
+be configured to do more.
+
+```sh
+go install github.com/mgechev/revive@latest
+```
+
+### buffet-option: golangci-lint
+
+Marketed as the 'buffet' approach - runs over 50 code-quality tools, including
+the above. Shouldn't be installed like the above, but the binary should be
+downloaded from the [official website](https://golangci-lint.run/usage/install/).
+
+**Note: it is recommended that you start with `go vet`, `staticcheck` and `revive`
+first and only then move to `golangci-lint` (pg 272).
+
+### Using `govulncheck` to Scan for Vulnerable Dependencies
+
+Scans for known vulnerabilities. The [public database](https://pkg.go.dev/vuln/) 
+is maintained by the `Go Team`.
+
+```sh
+go install golang.org/x/vuln/cmd/govulncheck@latest
+```
+
+See p272 for details.
+
+### Embedding Content into your program
+
+If your program needs auxiliary files (ie templates for a web server), but
+you still want to have a single binary you need to use `go:embed` comments.
+
+There are various rules regarding embedding:
+
+* it must done like shown below
+* it should be treated as immutable
+* it can only be embedded into a package-level variable
+* the variable must be of type `string`, `[]byte` or `embed.FS`.
+
+```go
+package main
+
+import (
+	_ "embed"
+	"fmt"
+	"os"
+	"strings"
+)
+
+//go:embed passwords.txt
+var passwords string
+
+func main() {
+	pwds := strings.Split(passwords, "\n")
+	if len(os.Args) > 1 {
+		for _, v := range pwds {
+			if v == os.Args[1] {
+				fmt.Println("true")
+				os.Exit(0)
+			}
+		}
+		fmt.Println("false")
+	}
+}
+```
+
+If you have a single file use `string` or `[]byte`. If you have one or more
+directories, use `embed.FS` (which implements 3 interfaces in the `io/fs` package
+and allows to treat the embedded files via a virtual file system).
+
+See p276 for details.
+
+### Embedding Hidden Files
+
+One needs to do some special things to embed files / directories that start 
+with a `.` or `_`. 
+
+See pg277.
+
+```go
+package main
+//go:embed parent_dir
+var noHidden embed.FS
+
+//go:embed parent_dir/*
+var parentHiddenOnly embed.FS
+
+//go:embed all:parent_dir
+var allHidden embed.FS
+```
+
+### Using go generate
+
+The command looks for specially formatted comments in the source code and
+runs programs specified in those comments. It can run anything at all, but
+is most commonly used to generate new source code ie `protobuf`:
+
+```proto
+syntax = "proto3";
+
+message Person {
+  string name = 1;
+  int32 id = 2;
+  string email = 3;
+}
+```
+
+```sh
+go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.28
+```
+
+Another common tools is `stringer`:
+
+```sh
+go install golang.org/x/tools/cmd/stringer@latest
+```
+
+it can be used for enumerations, where the tooling is lagging behind other
+languages: it generates a `String` method for `enums`.
+
+### Working with go generate and Makefiles
+
+TODO: pg281
+
 ## Chapter 12: Concurrency
 
 > For our purposes, all you need to understand is that more concurrency does
@@ -762,3 +902,276 @@ There are a lot of advantages to using `goroutines` and it allows `go programs` 
 of thousands of simultaneous goroutines.
 
 A `goroutine` is launched by placing the `'go'` keyword before a function invocation.
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+	x := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
+	result := processConcurrently(x)
+	fmt.Println(result)
+}
+
+func process(val int) int {
+	return val * 2
+}
+
+func processConcurrently(inVals []int) []int {
+	// create the channels
+	in := make(chan int, 5)
+	out := make(chan int, 5)
+	// launch goroutines
+	for i := 0; i < 5; i++ {
+		go func() {
+			for val := range in {
+				result := process(val)
+				out <- result
+			}
+		}()
+	}
+	// load the data into the channel in another goroutine
+	go func() {
+		for _, v := range inVals {
+			in <- v
+		}
+	}()
+	// read the data
+	outVals := make([]int, 0, len(inVals))
+	for i := 0; i < len(inVals); i++ {
+		outVals = append(outVals, <-out)
+	}
+	return outVals
+}
+```
+
+### Channels
+
+`Goroutines` communicate using `channels`. They are a built-in type.
+
+```go
+package main
+
+ch := make(chan int)
+```
+
+Use the `<-` `operator` to interact with the channels.
+
+```go
+package main
+
+a := <-ch // reads a value from a channel `ch` and assigns it to a
+ch <- b // write the value b to channel `ch`
+```
+
+Each value written to a channel can only be read once. If multiple goroutines are reading
+from the same channel, a value written to the channel will be read by only one of them.
+
+A single `goroutine` rarely reads and writes to the same channel. An arrow (`<-`) can be used
+to indicate that a `goroutine` should only 'read from' or 'write to' a channel (this is to allow
+the `go` compiler to check if your code is doing the right thing):
+
+```go
+package main
+
+ch <-chan int // the goroutine only READS from a channel
+ch chan<- int // the goroutine only WRITES to a channel
+```
+
+Channels are `unbuffered` by default - this causes the writing `goroutine` to pause until another
+`goroutine` reads from the same channel. Likewise, a read from an open, unbuffered channel causes
+the reading `goroutine` to pause until another goroutine writes to the same channel. **This means
+you cannot write to or read from an unbuffered channel without at least two concurrently running
+goroutines!**
+
+There are also `buffered` channels. These channels buffer a limited number of writes without blocking.
+If the buffer fills before there are any reads on the channel, a subsequent write to the channel
+pauses the writing `goroutine` until the channel is read. Just as writing to a channel with a full buffer
+blocks, reading from a channel with an empty buffer also blocks.
+
+Here is how you create a buffered channel (specify the capacity when creating the channel):
+
+```go
+package main
+ch := make(chan int, 10)
+```
+
+Use built-in functions `len` and `cap` to return information about the channel:
+
+ * `len`: find out how many values are currently in the buffer
+ * `cap`: find out the maximum buffer size
+
+**Note: Most of the time you should use unbuffered channels.**
+
+#### Using for-range and Channels
+
+You can read from channels using the `for-range` loop. If no value is available
+on the channel, the `goroutine` pauses until there is one or the `channel` is closed.
+
+```go
+package main
+
+import "fmt"
+
+for v:= range ch {
+	// note that there is only a single variable declared
+	fmt.Println(v)
+}
+```
+
+#### Closing a channel
+
+When you are done writing, you should close the channel:
+
+```go
+package main
+
+close(ch)
+```
+
+Once closed, any attempts to write to it (or close it again) will cause a panic. If
+the channel is `buffered` and some values haven't been read yet, they will be returned
+in order. If they are `unbuffered` (or `buffered` has not values), the `zero value` for
+the `channels` type is returned.
+
+Use the `comma idiom` to differentiate if the `zero value` stems from a `closed channel` or
+an `empty channel`:
+
+```go
+package main
+v, ok := <-ch
+```
+
+**Note: Anytime you read from a channel that might be closed, use the comma idiom to ensure
+that the channels is still open.**
+
+**Note: The responsibility of closing the channel lies with the goroutine that writes to the
+channel. Be aware that closing a channel is only required if a goroutine is waiting for the
+channel to close (ie if the reading goroutine is listening in a for-range loop).** Since a
+channel is just another variable, the `go runtime` can detect channels that are no longer
+referenced and garbage collect them.
+
+#### Understanding how channels behave
+
+Channels have many states, each with a different behavior when reading, writing or closing:
+
+![Channel States](images/channel_states.png)
+
+You must avoid situations that cause a `go program` to `panic`. Follow the mentioned standard
+pattern ('writer is responsible for closing'). When multiple `goroutines` write to the same
+channel, it gets more complicated. See `sync.WaitGroup` to address this problem.
+
+#### select
+
+The `select` `statement` is the other thing that sets apart `go`'s concurrency model. It is the
+control structure for concurrency in `go` and elegantly solves a common problem:
+
+> if you can perform two concurrent operations, which one do you do first?
+
+You can't favor one operation over the others, or you'll never process some cases. This is called
+`starvation`.
+
+The `select` keyword allows a `goroutine` to read from or write to one of a set of multiple channels.
+It looks a great deal like a blank `switch` statement:
+
+```
+select {
+case v := <-ch:
+    fmt.Println(v)
+case v := <-ch2:
+    fmt.Println(v)
+case ch3 <- x:
+    fmt.Println("wrote", x)
+case <-ch4:
+    fmt.Println("got value on ch4, but ignored it
+}
+```
+
+Each `case` in a `select` is a read or a write to a `channel`. If a `read` or a `write` is possible,
+for a `case`, it is executed along with they body of the `case`.
+
+What if multiple cases have channels that can be read or written? `select` picks randomly from 
+any of its `cases` that can go forward. This solves cleanly the `starvation` problem as no
+`case` is favored and all are checked at the same time.
+
+Read pg 294 regarding how it also counters `deadlocks`.
+
+At any rate, if every `goroutine` in my program is deadlocked, the `go runtime` kills the 
+program.
+
+**Example how to use `select` to avoid deadlocks (from pg 295)**
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+	ch1 := make(chan int)
+	ch2 := make(chan int)
+
+	go func() {
+		v := 1
+		// writes to channel 1
+		ch1 <- v
+		// reads from channel 2
+		v2 := <-ch2
+		// the line below is never executed, as main exists and kills this 
+		// go routine. I need to 'clean up the goroutine' - see pg 299
+		fmt.Println("goroutine: ", v, v2)
+	}()
+
+	v := 2
+	var v2 int
+
+	select { // select checks if any of the cases can proceed! 
+	case ch2 <- v: // writes to channel 2
+	case v2 = <-ch1: // reads from channel 1
+	}
+
+	fmt.Println(v, v2)
+	// produces: 2 1, no deadlock!
+}
+```
+
+Since `select` is responsible for communicating over a number of channels, it is often
+embedded within a `for loop`.
+
+```go
+package main
+
+import "fmt"
+
+for {
+	select {
+	case <-done:
+		return
+    case v := <-ch:
+		fmt.Println(v)
+    }
+}
+```
+
+When using this `for-select` loop, you must include a way to exit the loop. This is shown 
+later (sneak peak: use the `context`).
+
+You can use a `default` clause, that is selected when there are no cases with channels that
+can be read from or written to. This can be used for non-blocking reads or writes:
+
+```go
+package main
+import "fmt"
+
+select {
+    case v := <-ch:
+		fmt.Println("read from ch:", v)
+    default:
+		fmt.Println("no value written to ch")
+}
+```
+
+**Note: Having a `default` case inside a `for-select` loop is almost always the wrong thing to do.
+
+### Concurrency Practices and Patterns
+

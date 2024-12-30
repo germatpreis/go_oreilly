@@ -2,14 +2,14 @@ package main
 
 import "fmt"
 
-func process(val int) int {
-	return val * 2
-}
-
 func main() {
 	x := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
 	result := processConcurrently(x)
 	fmt.Println(result)
+}
+
+func process(val int) int {
+	return val * 2
 }
 
 func processConcurrently(inVals []int) []int {
