@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"sync"
 )
@@ -16,7 +16,7 @@ func fetchUrl(url string, wg *sync.WaitGroup, ch chan<- string) {
 	}
 	defer resp.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		ch <- fmt.Sprintf("Error reading respone from %s: %s", url, string(body))
 	}
@@ -32,10 +32,11 @@ func main() {
 	}
 
 	var wg sync.WaitGroup
+	wg.Add(len(urls))
+
 	ch := make(chan string, len(urls))
 
 	for _, url := range urls {
-		wg.Add(1)
 		go fetchUrl(url, &wg, ch)
 	}
 

@@ -1175,3 +1175,396 @@ select {
 
 ### Concurrency Practices and Patterns
 
+#### Keep your APIs concurrency-free
+
+Concurrency is an implementation detail. This means you should never expose `channels` oder `mutexes` in your 
+API's types, functions and methods.
+
+#### Goroutines, for Loops, and Varying Variables
+
+Most of the time, the closure that you use to launch a `goroutine` has no parameters. Instead, it captures values from
+the environment where it was declared. 
+
+> Anytime a closure uses a variable whose value might change, use a parameter to pass a copy of the variables
+> current value into the closure
+
+```go
+package main
+
+for _, v: = range a {
+	go func(val int) {
+		ch <- val * 2
+    }(v)
+}
+```
+
+#### Always clean up your goroutines
+
+Whenever you launch a goroutine function, you must make sure that it will eventually exit. You don't want to create
+a `goroutine leak`. See next section.
+
+#### Use the Context to Terminate goroutines
+
+To solve the issue of a `goroutine leak`, you need a way to tell the `goroutine` that it is time to stop processing. For
+this you use a `context`.
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+)
+
+func countTo(ctx context.Context, max int) <-chan int {
+	ch := make(chan int)
+	go func() {
+		defer close(ch)
+		for i := 0; i < max; i++ {
+			select {
+			case <-ctx.Done():
+				return
+			case ch <- i:
+			}
+		}
+	}()
+	return ch
+}
+
+func main() {
+
+	// WithCancel returns a copy of parent with a new Done channel. The returned
+	// context's Done channel is closed when the returned cancel function is called
+	// or when the parent context's Done channel is closed, whichever happens first.
+	//
+	// Canceling this context releases resources associated with it, so code should
+	// call cancel as soon as the operations running in this Context complete.
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// ensure that cancel is called when main ends
+	// this closes the channel returned by `Done` and since a closed
+	// channel always returns a value, it ensures that the goroutine
+	// running `countTo` exits.
+	defer cancel()
+
+	// creates 10 times: a channel which is immediately used in a coroutine. The goroutine:
+	// - cleans up after itself (closes the channel from within with a `defer`
+	// - runs an endless a loop till 10
+	// - uses the first branch of the `select` to check the channel returned by Done() - if it returns a value it exits
+	// - tries to write to the channel in the second branch
+	ch := countTo(ctx, 10)
+	for i := range ch {
+		if i > 5 {
+			break
+		}
+		fmt.Println(i)
+	}
+}
+```
+
+#### Know when to use `Buffered` and `Unbuffered` Channels
+
+When you know exactly how many goroutines have launched, and you want each goroutine to exit
+as soon as it finishes work: then you buffered channels.
+
+#### Implement Backpressure (with buffered channels)
+
+TODO: pg302
+
+#### Turn Off a case in a select
+
+TODO: pg304
+
+When you need to combine data from multiple concurrent sources, the `select` keyword is 
+great. However, you need to properly handle closed channels.
+
+#### Time out code
+
+To enforce time limits how long a goroutine can run.
+
+```go
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"math/rand"
+	"time"
+)
+
+func main() {
+	result, err := timeLimit(doSomeWork, 2*time.Second)
+	fmt.Println(result, err)
+
+}
+
+func timeLimit[T any](worker func() T, limit time.Duration) (T, error) {
+	out := make(chan T, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
+	defer cancel()
+	go func() {
+		out <- worker()
+	}()
+	select {
+	case result := <-out:
+		return result, nil
+	case <-ctx.Done():
+		var zero T
+		return zero, errors.New("work timed out")
+	}
+}
+
+func doSomeWork() int {
+	if x := rand.Int(); x%2 == 0 {
+		return x
+	} else {
+		time.Sleep(10 * time.Second)
+		return 100
+	}
+}
+```
+
+#### Use WaitGroups
+
+If you are waiting on multiple goroutines to complete their work, use a `WaitGroup` (see 
+three examples below). It is critical that the same `WaitGroup` is used everywhere (use a
+pointer if you need to pass it into a function; a copy doesn't work)!
+
+**Note: `WaitGroups` are handy, but they shouldn't be my first choice when coordinating
+`goroutines`! Use them only when you have something to clean up (like closing a channel
+they all write to) after all your worker goroutines exit. Note: CHECK OUT 
+https://pkg.go.dev/golang.org/x/sync/errgroup INSTEAD?**
+
+**First example from book**
+
+```go
+package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+func main() {
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		doThing1()
+	}()
+	go func() {
+		defer wg.Done()
+		doThing2()
+	}()
+	go func() {
+		defer wg.Done()
+		doThing3()
+	}()
+	wg.Wait()
+}
+
+func doThing1() {
+	fmt.Println("Thing 1 done")
+}
+
+func doThing2() {
+	fmt.Println("Thing 2 done")
+}
+
+func doThing3() {
+	fmt.Println("Thing 3 done")
+}
+```
+
+**second example from book**
+
+```go
+package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+func processAndGather[T, R any](in <-chan T, processor func(T) R, num int) []R {
+	out := make(chan R, num)
+	var wg sync.WaitGroup
+	wg.Add(num)
+
+	for i := 0; i < num; i++ {
+		go func() {
+			defer wg.Done()
+			for v := range in {
+				out <- processor(v)
+			}
+		}()
+	}
+
+	// launching a monitoring go routine that waits till all
+	// processing is done
+	go func() {
+		wg.Wait()
+		// parallel writes to the channel and the
+		// channel should only be closed once, otherwise
+		// the go runtime will panic
+		//
+		// this is the way to do it
+		close(out)
+	}()
+
+	var result []R
+
+	// the `for-range` channel loop exits when out is closed and the buffer
+	// is empty. finally the function returns with all the values.
+	for v := range out {
+		result = append(result, v)
+	}
+	return result
+}
+
+func main() {
+	ch := make(chan int)
+	go func() {
+		for i := 0; i < 20; i++ {
+			ch <- i
+		}
+		close(ch)
+	}()
+	results := processAndGather(ch, func(i int) int {
+		return i * 2
+	}, 3)
+	fmt.Println(results)
+
+}
+```
+
+see also below for a more **practical example** from ChatGPT:
+
+```go
+package main
+
+import (
+	"fmt"
+	"io"
+	"net/http"
+	"sync"
+)
+
+func fetchUrl(url string, wg *sync.WaitGroup, ch chan<- string) {
+	defer wg.Done()
+	resp, err := http.Get(url)
+
+	if err != nil {
+		ch <- fmt.Sprintf("Error fetching %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		ch <- fmt.Sprintf("Error reading respone from %s: %s", url, string(body))
+	}
+
+	ch <- fmt.Sprintf("Response from %s: %s", url, string(body))
+}
+
+func main() {
+	urls := []string{
+		"https://jsonplaceholder.typicode.com/posts/1",
+		"https://jsonplaceholder.typicode.com/posts/2",
+		"https://jsonplaceholder.typicode.com/posts/3",
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(len(urls))
+
+	ch := make(chan string, len(urls))
+
+	for _, url := range urls {
+		go fetchUrl(url, &wg, ch)
+	}
+
+	wg.Wait()
+	close(ch)
+
+	for response := range ch {
+		fmt.Println(response)
+	}
+}
+```
+
+#### Run code exactly once
+
+The `init` function should be reserved for initialization of effectively immutable package-level
+state. However, sometimes I want to `lazy load` or call some `initialization code` exactly once
+after program launch (ie because init is relatively slow and may not be needed every time). 
+
+For this, you can use `sync.Once`.
+
+```go
+package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+func main() {
+	// initializing! will pint out only once
+	result := Parse("hello")
+	fmt.Println(result)
+	result = Parse("goodbye")
+	fmt.Println(result)
+}
+
+type SlowComplicatedParser interface {
+	Parse(string) string
+}
+
+var parser SlowComplicatedParser
+var once sync.Once
+
+func Parse(dataToParse string) string {
+	once.Do(func() {
+		parser = initParser()
+	})
+	return parser.Parse(dataToParse)
+}
+
+func initParser() SlowComplicatedParser {
+	fmt.Println("initializing!")
+	return SCPI{}
+}
+
+type SCPI struct{}
+
+func (s SCPI) Parse(in string) string {
+	if len(in) > 1 {
+		return in[0:1]
+	}
+	return ""
+}
+```
+
+Same as with `WaitGroup`, you have to make sure to use always the same instance! 
+**Declaring `sync.Once` inside a function is usually the wrong thing to do**. For 
+this, there are **dedicated helpers** `sync.OnceFunc`, `sync.OnceValue` and
+`sync.OnceValues`: 
+
+see pg 309
+
+#### Put your concurrent tools together
+
+see pg 309
+
+#### When to use mutexes instead of channels
+
+SKIPPED
+
+#### Atomics - you probably don't need these
+
+SKIPPED
+
+#### Where to Learn more about concurrency
+
+See book `concurrency in go`
