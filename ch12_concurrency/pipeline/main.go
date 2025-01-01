@@ -31,7 +31,7 @@ func GatherAndProcess(ctx context.Context, data Input) (COut, error) {
 
 	c := newCProcessor()
 	c.start(ctx, cIn)
-
+	cOut, err := c.wait(ctx)
 	if err != nil {
 		return COut{}, err
 	}
@@ -45,7 +45,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	cout, err := GatherAndProcess(context.Background(), Input{
+	cOut, err := GatherAndProcess(context.Background(), Input{
 		A: os.Args[1],
 		B: os.Args[2],
 	})
@@ -53,6 +53,5 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println(cout)
-
+	fmt.Println(cOut)
 }
