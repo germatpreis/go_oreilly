@@ -29,6 +29,9 @@ version for a given module
 go mod vendor - creates a directory 'vendor' at the top level of the module 
 that contains all your modules dependencies. Needs to be run everythime a new 
 dependency is added or upgraded. This has fallen out of favour. Can speed up builds though.
+
+go test - run tests in current directory
+go test ./... - run tests in current director AND all subdirectories
 ```
 
 # Book
@@ -1555,7 +1558,7 @@ see pg 309
 
 #### Put your concurrent tools together
 
-see pg 309
+see pg 309 and especially sample code at `ch12_concurrency/pipeline`
 
 #### When to use mutexes instead of channels
 
@@ -1568,3 +1571,173 @@ SKIPPED
 #### Where to Learn more about concurrency
 
 See book `concurrency in go`
+
+## Chapter 15: Testing
+
+Every test file must be placed in the same directory as the code under test and
+must end with `_test`:
+
+```
+adder.go
+adder_test.go
+```
+
+All test functions must look like the below (start with `Test` and take a 
+single parameter `t *testing.T`). Tests for not-exposed function have a `_`
+between `Test` and the descriptive name like below:
+
+```go
+package adder
+
+import "testing"
+
+func Test_addNumbers(t *testing.T) {
+	result := addNumbers(2,3)
+	if result != 5 {
+		t.Error("incorrect result: expected 5, got", result)
+	}
+}
+```
+
+### Reporting Test Failures
+
+Run tests like this:
+
+```sh
+go test ./...
+```
+
+Report test failures in code:
+
+```
+t.Error("incorrect result: expected 5, got", result)
+t.Errorf("incorrect result: expected %d, got %d", 5, result)
+```
+
+To fail fast use:
+
+```
+t.Fatal
+t.Fatalf
+```
+
+Use a `TestMain` function to set-up or tear-down stuff (see below). 
+
+**Note: `TestMain` is invoked ONCE and there can only be one function
+with that name for a given package.**
+
+### Setting Up and Tearing Down
+
+```go
+package setup_up_tear_down
+
+import (
+	"fmt"
+	"os"
+	"testing"
+	"time"
+)
+
+var testTime time.Time
+
+func TestMain(m *testing.M) {
+	fmt.Println("Set up stuff for tests here")
+	testTime = time.Now()
+	exitVal := m.Run()
+	fmt.Println("Clean up stuff after tests here")
+	os.Exit(exitVal)
+}
+
+func TestFirst(t *testing.T) {
+	fmt.Println("(1) Use stuff set up in TestMain ", testTime)
+}
+
+func TestSecond(t *testing.T) {
+	fmt.Println("(2): Use stuff set up in TestMain ", testTime)
+}
+```
+
+Use `t.Cleanup` to clean up temporary resources that have been created. For
+simple tests you can just use `defer`, but it is useful when tests rely
+on helper function to ie. set up sample data:
+
+```go
+package cleanup
+
+import (
+	"errors"
+	"os"
+	"testing"
+)
+
+func createFile(t *testing.T) (_ string, err error) {
+	// in production code use os.CreateTemp instead
+	f, err := os.Create("tempFile")
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		err = errors.Join(err, f.Close())
+	}()
+	t.Cleanup(func() {
+		os.Remove(f.Name())
+	})
+	return f.Name(), nil
+}
+```
+
+### Testing with Environment Variables
+
+Use `t.Setenv` to register a value for an environment variable.
+
+### Storing sample test data
+
+If you need sample data, create a subdirectory named `testdata`. When reading from
+testdata, always use a relative file reference.
+
+See sample at `ch15_tests/text`.
+
+### Caching Test Results
+
+Go caches test results when running tests across multiple package
+if they have passed and their code hasn't changed. They are recompiled
+and rerun if something changes in the `testdata` directory.
+
+### Testing your public API
+
+The tests are still in the same directory as the production files
+but the `go` convention is to name the package `<packagename_test>`.
+
+### Using go-cmp to compare test results
+
+Use the third-party lib `go-cmp` and `cmp.Diff` for this.
+
+```go
+package main
+
+import "testing"
+
+func TestCreatePersonIgnoreDate(t *testing.T) {
+	expected := Person{
+		Name: "Dennis",
+		Age:  37,
+	}
+	result := CreatePerson("Dennis", 37)
+
+	comparer := cmp.Comparer(func(x, y Person) bool {
+		return x.Name == y.Name && x.Age == y.Age
+	})
+
+	if diff := cmp.Diff(expected, result, comparer); diff != "" {
+		t.Error(diff)
+	}
+
+	if result.DateAdded.IsZero() {
+		t.Error("DateAdded wasn't assigned")
+	}
+}
+```
+
+### Running table tests
+
+TODO: pg 380
